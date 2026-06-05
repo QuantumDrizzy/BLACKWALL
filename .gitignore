@@ -1,0 +1,23 @@
+# Build artifacts
+*.exe
+*.obj
+*.lib
+*.exp
+*.pdb
+build/
+
+# Results / data / figures (keep local, per policy)
+results/
+*.json
+*.csv
+*.png
+
+# Vendored deps (CUTLASS gets cloned for the FP4 DEEP DIVE)
+third_party/
+extern/
+cutlass/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
