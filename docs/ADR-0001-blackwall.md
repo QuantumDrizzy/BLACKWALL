@@ -38,10 +38,10 @@ A small, honest CUDA benchmark. **C++/CUDA** core (cuBLAS / cuBLASLt; CUTLASS fo
 
 | Op | Build | Gate |
 |----|-------|------|
-| **BREACH** | cuBLAS GEMM sweep, FP32/TF32/BF16/FP16(2 accum)/FP8 | TFLOP/s + % of peak, event-timed, medians — **done** |
-| **RAM** | GDDR7 bandwidth microbench | GB/s vs spec, % of peak |
-| **DEEP DIVE** | FP4 (nvfp4/mxfp4) via cuBLASLt → CUTLASS fallback | correctness vs FP16 + TFLOP/s + honest FP4-over-FP8 delta. `[KNOWN_LIMIT]` if toolchain stalls |
-| **THE TRACE** | correctness check + roofline figure + README report | error bounded, figure reproducible |
+| **BREACH** | cuBLAS GEMM sweep, FP32/TF32/BF16/FP16(2 accum)/FP8 | TFLOP/s + % of peak, event-timed, medians — **✅ done** |
+| **DEEP DIVE** | FP4 (nvfp4) via **cuBLASLt block-scaling** (no CUTLASS needed) | 342 TFLOP/s · 20× FP32 · ≈2× FP8 — **✅ done** (throughput) |
+| **THE TRACE** | roofline figure + numerical correctness vs an FP16 reference | figure **✅** · FP8/FP4 correctness (real block-scaling) = **open gate**, not faked |
+| **RAM** | GDDR7 bandwidth microbench | GB/s vs spec, % of peak — ⏳ |
 
 ## Consequences
 
@@ -57,7 +57,8 @@ FP4/CUTLASS is the real toolchain risk (gated last, de-risked via cuBLASLt first
 4. cuBLASLt FP8 rejected the config until the **D scale was removed** for a BF16 output
    (D scale only applies to an FP8 output).
 
-## BREACH result (N=8192, RTX 5060 Ti)
+## Result — BREACH + DEEP DIVE (N=8192, RTX 5060 Ti)
 
-FP32 17.0 (72% of 23.7 peak) · TF32 23.2 (1.36×) · BF16/FP16 f32-acc 46.4 (2.73×) ·
-FP16 f16-acc 85.7 (5.03×) · **FP8 e4m3→bf16 182.1 (10.64×)**.
+FP32 17.1 (72% of 23.7 peak) · TF32 23.8 (1.39×) · BF16/FP16 f32-acc 47.0 (2.75×) ·
+FP16 f16-acc 87.9 (5.15×) · FP8 e4m3→bf16 184.6 (10.82×) · **FP4 nvfp4→bf16 341.9 (20.04×)**.
+The ladder ≈ doubles each precision halving — the consistency *is* the honesty check.

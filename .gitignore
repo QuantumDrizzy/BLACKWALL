@@ -11,6 +11,8 @@ results/
 *.json
 *.csv
 *.png
+# the roofline figure is the deliverable -> committed (exception to *.png)
+!docs/roofline.png
 
 # Vendored deps (CUTLASS gets cloned for the FP4 DEEP DIVE)
 third_party/

@@ -139,6 +139,71 @@ static double time_fp8_gemm(cublasLtHandle_t lt, int n, int iters) {
     return (double)ms / iters;
 }
 
+// FP4 (nvfp4 e2m1 in, bf16 out) GEMM via cuBLASLt — the DEEP DIVE, beyond the wall.
+// NVFP4 = 4-bit e2m1 values + per-16-element ue4m3 block scales (microscaling).
+// Throughput-only (zero data); block-scale tensors overallocated + filled with a
+// valid ue4m3 byte. Returns ms/iter, or -1 if no FP4 algo for this config.
+static double time_fp4_gemm(cublasLtHandle_t lt, int n, int iters) {
+    const size_t elems = (size_t)n * n;
+    const size_t wsBytes = 64ull * 1024 * 1024;
+    void *A=nullptr,*B=nullptr,*D=nullptr,*ws=nullptr,*scA=nullptr,*scB=nullptr;
+    CUDA_CHECK(cudaMalloc(&A, elems / 2));          // 4-bit: 2 elems/byte
+    CUDA_CHECK(cudaMalloc(&B, elems / 2));
+    CUDA_CHECK(cudaMalloc(&D, elems * 2));          // bf16 out
+    CUDA_CHECK(cudaMalloc(&ws, wsBytes));
+    CUDA_CHECK(cudaMalloc(&scA, elems / 8));        // ue4m3 block scales (>= elems/16)
+    CUDA_CHECK(cudaMalloc(&scB, elems / 8));
+    CUDA_CHECK(cudaMemset(A, 0, elems / 2)); CUDA_CHECK(cudaMemset(B, 0, elems / 2));
+    CUDA_CHECK(cudaMemset(D, 0, elems * 2));
+    CUDA_CHECK(cudaMemset(scA, 0x38, elems / 8)); CUDA_CHECK(cudaMemset(scB, 0x38, elems / 8));
+
+    cublasLtMatmulDesc_t op;
+    CUBLAS_CHECK(cublasLtMatmulDescCreate(&op, CUBLAS_COMPUTE_32F, CUDA_R_32F));
+    cublasOperation_t tA = CUBLAS_OP_T, tB = CUBLAS_OP_N;
+    CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSA, &tA, sizeof(tA)));
+    CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSB, &tB, sizeof(tB)));
+    int32_t scaleMode = CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3;
+    CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_A_SCALE_MODE, &scaleMode, sizeof(scaleMode)));
+    CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_B_SCALE_MODE, &scaleMode, sizeof(scaleMode)));
+    CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &scA, sizeof(scA)));
+    CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &scB, sizeof(scB)));
+
+    cublasLtMatrixLayout_t lA, lB, lD;
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&lA, CUDA_R_4F_E2M1, n, n, n));
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&lB, CUDA_R_4F_E2M1, n, n, n));
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&lD, CUDA_R_16BF,    n, n, n));
+
+    cublasLtMatmulPreference_t pref;
+    CUBLAS_CHECK(cublasLtMatmulPreferenceCreate(&pref));
+    CUBLAS_CHECK(cublasLtMatmulPreferenceSetAttribute(
+        pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &wsBytes, sizeof(wsBytes)));
+    cublasLtMatmulHeuristicResult_t heur{}; int got = 0;
+    cublasStatus_t hs = cublasLtMatmulAlgoGetHeuristic(lt, op, lA, lB, lD, lD, pref, 1, &heur, &got);
+    if (got == 0) {
+        fprintf(stderr, "# FP4: no algo for n=%d (heuristic status %d)\n", n, (int)hs);
+        cudaFree(A); cudaFree(B); cudaFree(D); cudaFree(ws); cudaFree(scA); cudaFree(scB);
+        return -1.0;
+    }
+    const float alpha = 1.0f, beta = 0.0f;
+    auto run = [&]() {
+        CUBLAS_CHECK(cublasLtMatmul(lt, op, &alpha, A, lA, B, lB, &beta,
+                                    D, lD, D, lD, &heur.algo, ws, wsBytes, 0));
+    };
+    for (int i = 0; i < 5; ++i) run();
+    CUDA_CHECK(cudaDeviceSynchronize());
+    cudaEvent_t e0, e1; CUDA_CHECK(cudaEventCreate(&e0)); CUDA_CHECK(cudaEventCreate(&e1));
+    CUDA_CHECK(cudaEventRecord(e0));
+    for (int i = 0; i < iters; ++i) run();
+    CUDA_CHECK(cudaEventRecord(e1)); CUDA_CHECK(cudaEventSynchronize(e1));
+    float ms = 0.0f; CUDA_CHECK(cudaEventElapsedTime(&ms, e0, e1));
+    cudaEventDestroy(e0); cudaEventDestroy(e1);
+    cublasLtMatmulPreferenceDestroy(pref);
+    cublasLtMatrixLayoutDestroy(lA); cublasLtMatrixLayoutDestroy(lB); cublasLtMatrixLayoutDestroy(lD);
+    cublasLtMatmulDescDestroy(op);
+    cudaFree(A); cudaFree(B); cudaFree(D); cudaFree(ws); cudaFree(scA); cudaFree(scB);
+    return (double)ms / iters;
+}
+
 int main() {
     int dev = 0; CUDA_CHECK(cudaGetDevice(&dev));
     cudaDeviceProp p; CUDA_CHECK(cudaGetDeviceProperties(&p, dev));
@@ -193,6 +258,13 @@ int main() {
             double tf = 2.0 * (double)n * n * n / (fp8_ms / 1e3) / 1e12;
             printf("%-12s %6d %10.3f %10.1f %10.2fx\n",
                    "FP8e4m3>bf16", n, fp8_ms, tf, tf / fp32_tflops);
+        }
+        // FP4 (nvfp4 e2m1, bf16 out) via cuBLASLt — DEEP DIVE, beyond the wall.
+        double fp4_ms = time_fp4_gemm(lt, n, iters);
+        if (fp4_ms > 0.0) {
+            double tf = 2.0 * (double)n * n * n / (fp4_ms / 1e3) / 1e12;
+            printf("%-12s %6d %10.3f %10.1f %10.2fx\n",
+                   "FP4nvfp4>bf16", n, fp4_ms, tf, tf / fp32_tflops);
         }
         printf("------------------------------------------------------------\n");
     }

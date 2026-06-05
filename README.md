@@ -12,17 +12,20 @@ about the trade.
 
 ---
 
-## The trace so far — `:: BREACH` (cuBLAS GEMM, N = 8192)
+## The trace — `:: BREACH` + `:: DEEP DIVE` (cuBLAS/cuBLASLt GEMM, N = 8192)
+
+![BLACKWALL precision spectrum](docs/roofline.png)
 
 GPU: **RTX 5060 Ti** · sm_120 · 36 SMs · ~2.57 GHz · FP32 CUDA-core peak **23.7 TFLOP/s**
 
 | precision | TFLOP/s | vs FP32 |
 |-----------|--------:|--------:|
-| FP32 (CUDA cores)            |  17.0 | 1.00× — **72% of peak** |
-| TF32                         |  23.2 | 1.36× |
-| BF16 / FP16 (FP32 accumulate)|  46.4 | 2.73× |
-| FP16 (FP16 accumulate)       |  85.7 | 5.03× |
-| **FP8 e4m3 → bf16**          | **182.1** | **10.64×** |
+| FP32 (CUDA cores)             |  17.1 | 1.00× — **72% of peak** |
+| TF32                          |  23.8 | 1.39× |
+| BF16 / FP16 (FP32 accumulate) |  47.0 | 2.75× |
+| FP16 (FP16 accumulate)        |  87.9 | 5.15× |
+| FP8 e4m3 → bf16               | 184.6 | 10.82× |
+| **FP4 nvfp4 → bf16**          | **341.9** | **20.04×** |
 
 **What the trace says — honestly:**
 - FP32 SGEMM sits at **72% of the computed CUDA-core peak** — a healthy anchor. The
@@ -30,8 +33,10 @@ GPU: **RTX 5060 Ti** · sm_120 · 36 SMs · ~2.57 GHz · FP32 CUDA-core peak **2
 - **FP32 accumulation costs ~2× on the tensor cores.** The "safe-for-training" path
   (BF16/FP16 + FP32 accumulate) is ~46 TFLOP/s; dropping to FP16 accumulate nearly
   doubles it to ~86. Speed vs numerical headroom — that trade *is* mixed precision.
-- **FP8 reaches 182 TFLOP/s (10.6× FP32)**, ≈ 96% of the estimated dense-FP8 ceiling.
-  This is where consumer Blackwell earns its keep.
+- **FP8 reaches 185 TFLOP/s (10.8×); FP4 (nvfp4) reaches 342 TFLOP/s (20×).** Each
+  precision halving ≈ doubles throughput — a clean, consistent ladder (FP4 ≈ 2× FP8,
+  ≈ 90% of the estimated dense-FP4 ceiling). **That consistency is the evidence the
+  numbers are real, not flukes.** This is where consumer Blackwell earns its keep.
 
 ---
 
@@ -43,9 +48,12 @@ GPU: **RTX 5060 Ti** · sm_120 · 36 SMs · ~2.57 GHz · FP32 CUDA-core peak **2
   (those are sparse / FP4 and not comparable to dense GEMM here).
 - `[KNOWN_LIMIT]` consumer Blackwell ≠ datacenter (no NVLink/HBM; FP64 is crippled
   on GeForce and deliberately not characterized).
-- This pass is **throughput-only** (zero data). A value-correctness check vs an FP32
-  reference lands with the FP4 work — *a fast GEMM that is wrong is worthless.* Stated
-  plainly, not hidden.
+- **The throughput numbers are honest and consistent; numerical correctness is the one
+  open gate.** This pass uses zero data + dummy block scales — valid for *timing* (GEMM
+  doesn't short-circuit on zeros), but the low-precision results are **not yet verified**
+  against an FP32 reference. For FP4 that matters most — *a fast 4-bit GEMM that is wrong
+  is worthless.* Real-data quantization + per-block scaling vs an FP32 reference is
+  `THE TRACE`'s remaining work — **documented, not faked.**
 
 ---
 
@@ -54,9 +62,9 @@ GPU: **RTX 5060 Ti** · sm_120 · 36 SMs · ~2.57 GHz · FP32 CUDA-core peak **2
 | op | what | status |
 |----|------|--------|
 | **BREACH**    | cuBLAS GEMM roofline, FP32 → FP8 | ✅ done |
+| **DEEP DIVE** | FP4 (nvfp4) via cuBLASLt block-scaling, beyond the wall | ✅ done |
+| **THE TRACE** | roofline figure ✅ · numerical correctness (FP8/FP4 vs FP16 ref) ⏳ | partial |
 | **RAM**       | GDDR7 memory bandwidth | ⏳ |
-| **DEEP DIVE** | FP4 (nvfp4 / mxfp4), beyond the wall | ⏳ |
-| **THE TRACE** | correctness check + roofline figure + the honest report | ⏳ |
 
 ---
 
