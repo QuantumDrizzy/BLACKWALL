@@ -32,6 +32,8 @@ GPU: **RTX 5060 Ti** · sm_120 · 36 SMs · ~2.57 GHz · FP32 CUDA-core peak **2
 | FP8 e4m3 → bf16               | 184.6 | 10.82× |
 | **FP4 nvfp4 → bf16**          | **341.9** | **20.04×** |
 
+![BLACKWALL precision ladder](docs/precision_ladder.png)
+
 **What the trace says — honestly:**
 - FP32 SGEMM sits at **72% of the computed CUDA-core peak** — a healthy anchor. The
   measurement is real, not cherry-picked.
