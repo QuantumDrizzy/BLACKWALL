@@ -10,6 +10,11 @@ The dive: lower precision = deeper into the Net = faster, more dangerous (lossie
 This repo measures exactly *how much* faster, at *what* depth — and tells the truth
 about the trade.
 
+> **`:: SISTER OP`** — [**ICEPICK**](https://github.com/QuantumDrizzy/ICEPICK) goes *under* the
+> roofline: it cracks the **microarchitecture** (instruction latency, cache/memory hierarchy)
+> by SASS + microbenchmarking. BLACKWALL maps the **compute**; ICEPICK dissects the **silicon
+> beneath it**. Same die, two blades.
+
 ---
 
 ## The trace — `:: BREACH` + `:: DEEP DIVE` (cuBLAS/cuBLASLt GEMM, N = 8192)
